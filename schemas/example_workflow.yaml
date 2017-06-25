@@ -1,0 +1,23 @@
+name: example_workflow
+description: Execute Token through flow.
+
+
+tasks:
+  - id: fetch_wordlist
+    type: collector
+
+  - id: mutate_wordlist
+    type: processor
+
+  - id: fs_persist
+    type: exporter
+
+flow:
+  - id: fetch_mutate
+    from: fetch_wordlist
+    to: mutate_wordlist
+
+
+  - id: mutate_persist
+    from: mutate_wordlist
+    to: fs_persist

@@ -1,0 +1,24 @@
+name: downloadReplay
+description: Download specified replays from Steam datacenter.
+
+
+tasks:
+  - id: downloadReplay
+    type: collector
+
+  - id: parseReplay
+    type: processor
+
+  - id: uploadReplayToS3
+    type: processor
+
+flow:
+  - id: download_parse
+    from: downloadReplay
+    to: parseReplay
+    condition: ""
+
+  - id: parse_upload
+    from: parseReplay
+    to: uploadReplayToS3
+    condition: ""
