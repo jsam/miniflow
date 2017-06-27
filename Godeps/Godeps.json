@@ -1,0 +1,34 @@
+{
+	"ImportPath": "github.com/jsam/miniflow",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v79",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/nats-io/go-nats",
+			"Comment": "v1.2.2-82-g0f25ebd",
+			"Rev": "0f25ebdb0f66fac3de939396a6eeb64d3cee23cd"
+		},
+		{
+			"ImportPath": "github.com/nats-io/go-nats/encoders/builtin",
+			"Comment": "v1.2.2-82-g0f25ebd",
+			"Rev": "0f25ebdb0f66fac3de939396a6eeb64d3cee23cd"
+		},
+		{
+			"ImportPath": "github.com/nats-io/go-nats/util",
+			"Comment": "v1.2.2-82-g0f25ebd",
+			"Rev": "0f25ebdb0f66fac3de939396a6eeb64d3cee23cd"
+		},
+		{
+			"ImportPath": "github.com/nats-io/nuid",
+			"Comment": "v1.0.0-2-g3cf34f9",
+			"Rev": "3cf34f9fca4e88afa9da8eabd75e3326c9941b44"
+		},
+		{
+			"ImportPath": "gopkg.in/yaml.v2",
+			"Rev": "cd8b52f8269e0feb286dfeef29f8fe4d5b397e0b"
+		}
+	]
+}

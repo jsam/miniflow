@@ -17,7 +17,6 @@ flow:
     from: fetch_wordlist
     to: mutate_wordlist
 
-
   - id: mutate_persist
     from: mutate_wordlist
     to: fs_persist
