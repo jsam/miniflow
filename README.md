@@ -1,4 +1,5 @@
 # miniflow
+[![Go Report Card](https://goreportcard.com/badge/github.com/jsam/miniflow)](https://goreportcard.com/report/github.com/jsam/miniflow)
 
 Workflow execution based on YAML definitions.
 
