@@ -1,13 +1,14 @@
 package miniflow
 
 import (
-	"context"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	nats "github.com/nats-io/go-nats"
 
@@ -30,6 +31,7 @@ var (
 	errTaskNotInSchema       = errors.New("Specified task name cannot be find in schema")
 	errNoStartTasks          = errors.New("There is no start tasks defined")
 	errAlreadyRunning        = errors.New("Workflow has already started")
+	errNotExecutable         = errors.New("Workflow is not executable. Try registering some functions to it")
 )
 
 // Condition is template which holds information about conditional routing.
@@ -45,6 +47,7 @@ func (c *Condition) isAllowed() bool {
 
 // Channel is a communication mechanism of Arc in the graph.
 type Channel struct {
+	ID    string
 	ch    chan *Token
 	route *Condition
 }
@@ -58,23 +61,22 @@ func (c *Channel) recv() *Token {
 }
 
 // NewChannel is constructor for Channel object.
-func NewChannel() *Channel {
+func NewChannel(id string) *Channel {
 	return &Channel{
-		ch:    make(chan *Token),
+		ID:    id,
+		ch:    make(chan *Token, 100000),
 		route: &Condition{},
 	}
 }
 
 // Token represent items which flows through the workflow.
 type Token struct {
-	Ctx  context.Context        // workflow meta information
 	Data map[string]interface{} // data processed from the last step.
 }
 
 // NewToken is constructor for new empty token.
 func NewToken() *Token {
 	return &Token{
-		context.Background(),
 		make(map[string]interface{}),
 	}
 }
@@ -101,42 +103,41 @@ type Task struct {
 	ID       string      `yaml:"id"`
 	Type     string      `yaml:"type"`
 	ExecFunc interface{} `yaml:"-"`
+	Workflow *Workflow
 
-	// Local Flow
 	ins  []*Channel // Fan-in
 	fin  <-chan *Token
 	outs []*Channel // Conditional Fan-out
 }
 
 func (task *Task) log(msg string, data ...interface{}) {
-	if data == nil {
-		log.Printf("[Task<%s>::%s]\t%s\n", task.Type, task.ID, msg)
-	} else {
-		log.Printf("[Task<%s>::%s]\t%s: %+v\n", task.Type, task.ID, msg, data)
-	}
+	// if data == nil {
+	// 	log.Printf("[Task<%s>::%s]\t%s\n", task.Type, task.ID, msg)
+	// } else {
+	// 	log.Printf("[Task<%s>::%s]\t%s: %+v\n", task.Type, task.ID, msg, data)
+	// }
 }
 
 func (task *Task) fanIn() <-chan *Token {
 	var wg sync.WaitGroup
 
-	out := make(chan *Token)
+	out := make(chan *Token, 5000000)
 
-	output := func(c <-chan *Token) {
-		for n := range c {
-			out <- n
-		}
+	output := func(c *Channel) {
 		wg.Done()
+
+		for {
+			token := <-c.ch
+			out <- token
+		}
 	}
 	wg.Add(len(task.ins))
+
 	for _, c := range task.ins {
-		go output(c.ch)
+		go output(c)
 	}
 
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-
+	wg.Wait()
 	return out
 }
 
@@ -145,48 +146,43 @@ func (task *Task) fanOut(token *Token) {
 		return
 	}
 	for _, channel := range task.outs {
+		//log.Printf("[fanOut] sending to %s", channel.ID)
 		channel.ch <- token
 	}
 }
 
-func (task *Task) execCollector() *Token {
-	task.log("Executing collector")
+// execCollector will start all registered collectors and make them flow through the graph.
+func (task *Task) execCollector(token *Token) *Token {
 	collector := task.ExecFunc.(CollectorFunc)
-	return collector()
+	return collector(token)
 }
 
 func (task *Task) execProcessor(token *Token) *Token {
-	task.log("Executing processor")
 	processor := task.ExecFunc.(ProcessorFunc)
 	return processor(token)
 }
 
 func (task *Task) execExporter(token *Token) {
-	task.log("Executing exporter")
 	exporter := task.ExecFunc.(ExporterFunc)
 	exporter(token)
 }
 
-func (task *Task) serveToken(w *Workflow) {
-	if task.Type == Collector {
-		token := task.execCollector()
-		atomic.AddInt64(&w.tokensFlowing, 1)
-		task.fanOut(token)
-	}
+func (task *Task) startWork(token *Token) {
+	switch task.Type {
+	case Processor:
+		task.fanOut(task.execProcessor(token))
 
+	case Exporter:
+		task.execExporter(token)
+		atomic.AddInt64(&task.Workflow.tokensFlowing, -1)
+		atomic.AddInt64(&task.Workflow.tokensFinished, 1)
+	}
+}
+
+func (task *Task) serveToken() {
 	for {
 		token := <-task.fin
-		switch task.Type {
-		case Processor:
-			task.fanOut(task.execProcessor(token))
-			continue
-
-		case Exporter:
-			task.execExporter(token)
-			atomic.AddInt64(&w.tokensFlowing, -1)
-			atomic.AddInt64(&w.tokensFinished, 1)
-			continue
-		}
+		go task.startWork(token)
 	}
 }
 
@@ -200,7 +196,6 @@ type WorkflowSchema struct {
 
 // NewWorkflowSchema constructor will source yaml file schema from provided schemaPath and return Workflow spec.
 func NewWorkflowSchema(schemaPath string) (*WorkflowSchema, error) {
-	// schema := make(map[string]interface{})
 	wfs := &WorkflowSchema{}
 
 	filename, err := filepath.Abs(schemaPath)
@@ -221,7 +216,7 @@ func NewWorkflowSchema(schemaPath string) (*WorkflowSchema, error) {
 }
 
 // CollectorFunc is function signature for entry point of data flow. Think E in ETL.
-type CollectorFunc func() *Token
+type CollectorFunc func(it *Token) *Token
 
 // ProcessorFunc is function signature for processing data. Think T in ETL.
 type ProcessorFunc func(in *Token) *Token
@@ -262,12 +257,16 @@ func NewFuncMap() *FuncMap {
 
 // Workflow is structure which will be used to execute a a workflow
 type Workflow struct {
-	Tasks  map[string]Task
-	Flows  map[string]Arc
-	config *Config
+	ID    string
+	Tasks map[string]Task
+	Flows map[string]Arc
+
+	config *NATSConfig
 
 	tokensFlowing  int64
 	tokensFinished int64
+
+	executable bool
 }
 
 // Register will register function mapping between workflow schema and actual code you wish to execute.
@@ -298,13 +297,42 @@ func (w *Workflow) Register(fnMap *FuncMap) error {
 			}
 		}
 	}
+	w.executable = true
 	return nil
 }
 
-// Run will start processing token through workflow.
-func (w *Workflow) Run(done chan bool) error {
-	// TODO: check that all tasks have attached functions
+// func (w *Workflow) newInstance(start chan *Token) {
+// 	for {
+// 		token := <-start
+// 		for _, task := range w.Tasks {
+// 			if task.Type == Collector {
+// 				collectedToken := task.execCollector(token)
+// 				atomic.AddInt64(&w.tokensFlowing, 1)
+// 				//log.Printf("NEW TOKEN %d", w.tokensFlowing)
+// 				task.fanOut(collectedToken)
+// 			}
+// 		}
+// 	}
+// }
 
+func (w *Workflow) newAsyncIstance(token *Token) {
+	for _, task := range w.Tasks {
+		if task.Type == Collector {
+			cToken := task.execCollector(token)
+			atomic.AddInt64(&w.tokensFlowing, 1)
+			task.fanOut(cToken)
+		}
+	}
+}
+
+// Run will start processing token through workflow.
+func (w *Workflow) Run(start chan *Token, done chan bool) error {
+
+	if w.executable == false {
+		return errNotExecutable
+	}
+
+	log.Printf("Starting workflow ID: %s\n", w.ID)
 	if w.tokensFlowing > 0 || w.tokensFinished > 0 {
 		return errAlreadyRunning
 	}
@@ -312,22 +340,39 @@ func (w *Workflow) Run(done chan bool) error {
 	for _, task := range w.Tasks {
 		if len(task.ID) > 0 {
 			tt := task
-			go tt.serveToken(w)
+			go tt.serveToken()
 		}
 	}
 
-	select {
-	case <-done:
-		if w.tokensFlowing != 0 {
-			// wait for drain out
+	for {
+		select {
+		case token := <-start:
+			go w.newAsyncIstance(token)
+			continue
+
+		case <-done:
+			drainCh := make(chan bool)
+			go func() {
+				for {
+					<-time.After(1000 * time.Millisecond)
+					ops := atomic.LoadInt64(&w.tokensFlowing)
+					log.Printf("[%s] Checking if done %d\n", w.ID, ops)
+					if ops == 0 {
+						drainCh <- true
+						done <- true
+					}
+				}
+			}()
+			<-drainCh
+			log.Println("Tearing down workflow.")
+			return nil
 		}
-		return nil
 	}
 }
 
 func (w *Workflow) bootstrapLocal(wfSchema *WorkflowSchema) error {
 	for _, arc := range wfSchema.Flow {
-		arcCh := NewChannel()
+		arcCh := NewChannel(arc.ID)
 		if fromTask, ok := w.Tasks[arc.FromID]; ok {
 			fromTask.outs = append(fromTask.outs, arcCh) // attach out channel to task
 			w.Tasks[arc.FromID] = fromTask
@@ -349,12 +394,12 @@ func (w *Workflow) bootstrapLocal(wfSchema *WorkflowSchema) error {
 
 func (w *Workflow) bootstrapNATS(wfSchema *WorkflowSchema, connector *nats.EncodedConn) error {
 	for _, arc := range wfSchema.Flow {
-		topic := arc.ID
+		topic := fmt.Sprintf("%s:%s", arc.ID, w.ID)
 
-		sendCh := NewChannel()
+		sendCh := NewChannel(topic)
 		connector.BindSendChan(topic, sendCh.ch)
 
-		recvCh := NewChannel()
+		recvCh := NewChannel(topic)
 		connector.BindRecvChan(topic, recvCh.ch)
 
 		if fromTask, ok := w.Tasks[arc.FromID]; ok {
@@ -383,9 +428,13 @@ func NewWorkflow(wfSchema *WorkflowSchema, connector *nats.EncodedConn) (*Workfl
 
 		tokensFlowing:  0,
 		tokensFinished: 0,
+
+		executable: false,
 	}
+	wf.ID = fmt.Sprintf("%p", wf)
 
 	for _, task := range wfSchema.Tasks {
+		task.Workflow = wf
 		wf.Tasks[task.ID] = task
 	}
 

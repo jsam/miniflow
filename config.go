@@ -2,16 +2,25 @@ package miniflow
 
 import nats "github.com/nats-io/go-nats"
 
-// Config for flowbee
-type Config struct {
+// NATSConfig for flowbee
+type NATSConfig struct {
 	conn        *nats.Conn
-	encodedConn *nats.EncodedConn
+	EncodedConn *nats.EncodedConn
 }
 
-// NewConfig constructor
-func NewConfig() *Config {
+// NewNATSConfig constructor
+func NewNATSConfig() *NATSConfig {
 	// TODO: read from os.Getenv
-	nc, _ := nats.Connect(nats.DefaultURL)
-	c, _ := nats.NewEncodedConn(nc, nats.JSON_ENCODER)
-	return &Config{nc, c}
+	nc, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		panic(err)
+	}
+	c, errEnc := nats.NewEncodedConn(nc, nats.JSON_ENCODER)
+	if errEnc != nil {
+		panic(errEnc)
+	}
+	if nc.Status() == nats.CONNECTED {
+		return &NATSConfig{nc, c}
+	}
+	return &NATSConfig{nil, nil}
 }
