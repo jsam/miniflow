@@ -1,7 +1,6 @@
 name: example_workflow
 description: Execute Token through flow.
 
-
 tasks:
   - id: fetch_wordlist
     type: collector

@@ -3,7 +3,7 @@ version: '2'
 services:
 
   nats:
-    image: nats:0.9.6
+    image: nats-streaming:0.5.0
     ports:
       - 4222:4222
       - 8222:8222

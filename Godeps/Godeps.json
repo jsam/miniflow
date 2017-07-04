@@ -7,9 +7,34 @@
 	],
 	"Deps": [
 		{
+			"ImportPath": "github.com/gogo/protobuf/gogoproto",
+			"Comment": "v0.4-23-gdda3e8a",
+			"Rev": "dda3e8acadcc9affc16faf33fbb229db78399245"
+		},
+		{
+			"ImportPath": "github.com/gogo/protobuf/proto",
+			"Comment": "v0.4-23-gdda3e8a",
+			"Rev": "dda3e8acadcc9affc16faf33fbb229db78399245"
+		},
+		{
+			"ImportPath": "github.com/gogo/protobuf/protoc-gen-gogo/descriptor",
+			"Comment": "v0.4-23-gdda3e8a",
+			"Rev": "dda3e8acadcc9affc16faf33fbb229db78399245"
+		},
+		{
 			"ImportPath": "github.com/nats-io/go-nats",
 			"Comment": "v1.2.2-82-g0f25ebd",
 			"Rev": "0f25ebdb0f66fac3de939396a6eeb64d3cee23cd"
+		},
+		{
+			"ImportPath": "github.com/nats-io/go-nats-streaming",
+			"Comment": "v0.3.4-27-gbf8654e",
+			"Rev": "bf8654e90f5296da96eab1e85808eb5c4b7b5541"
+		},
+		{
+			"ImportPath": "github.com/nats-io/go-nats-streaming/pb",
+			"Comment": "v0.3.4-27-gbf8654e",
+			"Rev": "bf8654e90f5296da96eab1e85808eb5c4b7b5541"
 		},
 		{
 			"ImportPath": "github.com/nats-io/go-nats/encoders/builtin",
