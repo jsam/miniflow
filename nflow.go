@@ -92,13 +92,15 @@ func (w *Workflow) Teardown(signalChan <-chan time.Time) {
 	cleanupDone := make(chan bool)
 	go func() {
 		for _ = range signalChan {
-			fmt.Printf("\nReceived an interrupt, unsubscribing and closing connection...\n\n")
+			log.Printf("Received an interrupt, unsubscribing and closing connection...")
 			// Do not unsubscribe a durable on exit, except if asked to.
-			for _, sub := range w.Subs {
-				sub.Unsubscribe()
-			}
+			// for _, sub := range w.Subs {
+			// 	sub.Unsubscribe()
+			// }
 			w.config.NATSConn.Close()
+			log.Printf("Closed connection to NATS.")
 			w.config.writeConfig()
+			log.Printf("Wrote to config .miniflow successfully.")
 			cleanupDone <- true
 		}
 	}()
