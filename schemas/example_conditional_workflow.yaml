@@ -1,0 +1,30 @@
+name: example_conditional_workflow
+description: Execute Token through flow.
+
+tasks:
+  - id: A
+    type: collector
+
+  - id: B
+    type: gateway
+
+  - id: C
+    type: exporter
+
+  - id: D
+    type: exporter
+
+flow:
+  - id: A_B
+    from: A
+    to: B
+
+  - id: B_C
+    from: B
+    to: C
+    condition:  some_id == 0
+
+  - id: B_D
+    from: B
+    to: D
+    condition: some_id != 0

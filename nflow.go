@@ -98,6 +98,7 @@ func (w *Workflow) Teardown(signalChan <-chan time.Time) {
 				sub.Unsubscribe()
 			}
 			w.config.NATSConn.Close()
+			w.config.writeConfig()
 			cleanupDone <- true
 		}
 	}()

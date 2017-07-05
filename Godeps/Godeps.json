@@ -7,6 +7,11 @@
 	],
 	"Deps": [
 		{
+			"ImportPath": "github.com/Knetic/govaluate",
+			"Comment": "v3.0.0-13-g31678da",
+			"Rev": "31678da578da40773346157387ef9933d650eb23"
+		},
+		{
 			"ImportPath": "github.com/gogo/protobuf/gogoproto",
 			"Comment": "v0.4-23-gdda3e8a",
 			"Rev": "dda3e8acadcc9affc16faf33fbb229db78399245"

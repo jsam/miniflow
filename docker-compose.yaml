@@ -3,6 +3,7 @@ version: '2'
 services:
 
   nats:
+    command: -cid miniflow -mc 0 -msu 0 -mm 0 -mb 0
     image: nats-streaming:0.5.0
     ports:
       - 4222:4222

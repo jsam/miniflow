@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 
+	"github.com/Knetic/govaluate"
 	"github.com/nats-io/go-nats-streaming"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -28,6 +29,22 @@ type Arc struct {
 
 	FromTask *Task `yaml:"-"`
 	ToTask   *Task `yaml:"-"`
+}
+
+func (a *Arc) isUsable(params map[string]interface{}) (bool, error) {
+	if len(a.Condition) == 0 {
+		return true, nil
+	}
+
+	expression, err := govaluate.NewEvaluableExpression(a.Condition)
+	if err != nil {
+		return false, err
+	}
+	result, err := expression.Evaluate(params)
+	if err != nil {
+		return false, err
+	}
+	return result.(bool), nil
 }
 
 // Task is graph element which represents task which is getting executed. Each task can have n in channels and m out channels.
@@ -54,12 +71,15 @@ func (t Task) serveToken(msg *stan.Msg) {
 
 	token := t.Fn(recvToken)
 	if token == nil {
-		token = NewToken()
+		// NOTE: If you returned nil that means that you want to stop that token from progressing through flow.
+		return
 	}
 
 	for _, toArc := range t.ToArcs {
-		subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.ID)
-		t.workflow.Publish(subj, token)
+		if usable, err := toArc.isUsable(token.Data); usable && err == nil {
+			subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.ID)
+			t.workflow.Publish(subj, token)
+		}
 	}
 
 }
