@@ -1,5 +1,5 @@
 name: example_conditional_workflow
-description: Execute Token through flow.
+description: Execute Token through conditional flow.
 
 tasks:
   - id: A

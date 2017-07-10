@@ -8,14 +8,24 @@ import (
 	"time"
 
 	"github.com/nats-io/go-nats-streaming"
-	"github.com/nats-io/go-nats-streaming/pb"
 )
 
 var (
-	errTaskNotFound       = errors.New("Task is not found")
-	errTaskNotImplemented = errors.New("Task is not implemented")
-	errNatsNoConnection   = errors.New("There is no NATS configuration")
+	errTaskNotFound           = errors.New("Task is not found")
+	errTaskNotImplemented     = errors.New("Task is not implemented")
+	errNatsNoConnection       = errors.New("There is no NATS configuration")
+	errWorkflowAlreadyRunning = errors.New("Workflow is already running")
 )
+
+// FlowError custom error holder.
+type FlowError struct {
+	Err  error
+	Data interface{}
+}
+
+func (fe FlowError) Error() string {
+	return fmt.Sprintf("%s \n %+#v", fe.Err, fe.Data)
+}
 
 // Token is data traveling from one task to task.
 type Token struct {
@@ -34,8 +44,11 @@ func NewToken() *Token {
 	}
 }
 
-// Work is definition for work implementation
+// Work is definition for work implementation.
 type Work func(*Token) *Token
+
+// Produce is definition for producer implementation.
+type Produce func() *Token
 
 // Workflow is structure which will be used to execute a a workflow
 type Workflow struct {
@@ -44,15 +57,31 @@ type Workflow struct {
 	Description string
 	Tasks       map[string]Task
 	Subs        []stan.Subscription
-	config      *NATSStreamingConfig
+
+	EndTokens chan *Token
+
+	producers []*Producer
+	running   bool
+
+	config *NATSStreamingConfig
 }
 
 func (w *Workflow) workCheck() error {
 	for _, value := range w.Tasks {
 		if value.Fn == nil {
-			return errTaskNotImplemented
+			return FlowError{errTaskNotImplemented, value}
 		}
 	}
+	return nil
+}
+
+// AttachProducer will register function which will produce tokens.
+func (w *Workflow) AttachProducer(concurency int, produceFn Produce) error {
+	if w.running {
+		return errWorkflowAlreadyRunning
+	}
+	producer := NewProducer(concurency, produceFn)
+	w.producers = append(w.producers, producer)
 	return nil
 }
 
@@ -65,11 +94,23 @@ func (w *Workflow) Publish(subject string, token *Token) error {
 	if err != nil {
 		return err
 	}
-	return w.config.NATSConn.Publish(subject, tokenB)
+	log.Printf("[nflow] Publishing to NATS. %s", subject)
+	msg, err := w.config.NATSConn.PublishAsync(subject, tokenB, nil)
+	if err != nil {
+		log.Printf("[nflow] Publish failed %+v", msg)
+		return err
+	} else {
+		log.Print("[nflow] Publish successeed %+v", msg)
+	}
+
+	return nil
 }
 
 // Register will register function mapping between workflow schema and actual code you wish to execute.
 func (w *Workflow) Register(name string, work Work) error {
+	if w.running {
+		return errWorkflowAlreadyRunning
+	}
 	task, ok := w.Tasks[name]
 	if !ok {
 		return errTaskNotFound
@@ -88,23 +129,32 @@ func (w *Workflow) ArcTasks(arc *Arc) (from Task, to Task) {
 
 // Teardown will gracefully shutdown workflow.
 func (w *Workflow) Teardown(signalChan <-chan time.Time) {
-	// signalChan := make(chan time.Time, 1)
 	cleanupDone := make(chan bool)
 	go func() {
 		for _ = range signalChan {
-			log.Printf("Received an interrupt, unsubscribing and closing connection...")
+			for _, producer := range w.producers {
+				producer.stop()
+			}
+			log.Printf("[nflow] Received an interrupt, unsubscribing and closing connection...")
+
 			// Do not unsubscribe a durable on exit, except if asked to.
-			// for _, sub := range w.Subs {
-			// 	sub.Unsubscribe()
-			// }
-			w.config.NATSConn.Close()
-			log.Printf("Closed connection to NATS.")
+			if w.config.Durable == "" {
+				for _, sub := range w.Subs {
+					sub.Unsubscribe()
+				}
+			}
 			w.config.writeConfig()
-			log.Printf("Wrote to config .miniflow successfully.")
+			log.Printf("[nflow] Wrote to config .miniflow successfully.")
 			cleanupDone <- true
 		}
 	}()
 	<-cleanupDone
+	w.running = false
+}
+
+func (w *Workflow) Stop() {
+	log.Printf("[nflow] Closed connection to NATS.")
+	w.config.NATSConn.Close()
 }
 
 // Run is method to start execution of the workflow.
@@ -112,50 +162,66 @@ func (w *Workflow) Run() error {
 	if err := w.workCheck(); err != nil {
 		return err
 	}
-
+	if w.running {
+		return errWorkflowAlreadyRunning
+	}
 	if w.config == nil {
 		return errNatsNoConnection
 	}
+	log.Printf("[nflow] ID: %s %s\n", w.ID, w.config.ClientID)
 
-	startOpt := stan.StartAt(pb.StartPosition_NewOnly)
+	// TODO(sam): rework QueueSubscribe to work with different configuration options
+	// startOpt := stan.StartAt(pb.StartPosition_NewOnly)
+	//
+	// if w.config.StartSeq != 0 {
+	// 	startOpt = stan.StartAtSequence(w.config.StartSeq)
+	// } else if w.config.DeliverLast == true {
+	// 	startOpt = stan.StartWithLastReceived()
+	// } else if w.config.DeliverAll == true {
+	// 	log.Print("subscribing with DeliverAllAvailable")
+	// 	startOpt = stan.DeliverAllAvailable()
+	// } else if w.config.StartDelta != "" {
+	// 	ago, err := time.ParseDuration(w.config.StartDelta)
+	// 	if err != nil {
+	// 		w.config.NATSConn.Close()
+	// 		log.Fatal(err)
+	// 	}
+	// 	startOpt = stan.StartAtTimeDelta(ago)
+	// }
 
-	if w.config.StartSeq != 0 {
-		startOpt = stan.StartAtSequence(w.config.StartSeq)
-	} else if w.config.DeliverLast == true {
-		startOpt = stan.StartWithLastReceived()
-	} else if w.config.DeliverAll == true {
-		log.Print("subscribing with DeliverAllAvailable")
-		startOpt = stan.DeliverAllAvailable()
-	} else if w.config.StartDelta != "" {
-		ago, err := time.ParseDuration(w.config.StartDelta)
-		if err != nil {
-			w.config.NATSConn.Close()
-			log.Fatal(err)
-		}
-		startOpt = stan.StartAtTimeDelta(ago)
+	if len(w.Tasks) > 0 {
+		w.running = true
 	}
 
 	// Subject is queue of name <arc_ID>:<workflow_ID>
 	// QueueGroup is task name, cause all same tasks are competing for work.
 	for _, task := range w.Tasks {
-		// TODO: subscribe to topic name <relation_name>:<workflow_id>
 		if len(task.FromArcs) == 0 {
 			subj := fmt.Sprintf("%s:%s", "start", w.ID)
-			sub, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, startOpt, stan.DurableName(w.config.Durable))
-			w.Subs = append(w.Subs, sub)
+			log.Printf("[nflow] Subscribing to %s", subj)
+			sub, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, stan.StartAtTime(time.Now()), stan.DurableName(w.config.Durable))
 			if err != nil {
 				w.config.NATSConn.Close()
 				log.Fatal(err)
 			}
+
+			w.Subs = append(w.Subs, sub)
 		}
 		for _, fromArc := range task.FromArcs {
 			subj := fmt.Sprintf("%s:%s", fromArc.ID, w.ID)
-			_, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, startOpt, stan.DurableName(w.config.Durable))
+			log.Printf("[nflow] Subscribing to %s", subj)
+			sub, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, stan.StartAtTime(time.Now()), stan.DurableName(w.config.Durable))
 			if err != nil {
 				w.config.NATSConn.Close()
 				log.Fatal(err)
 			}
+
+			w.Subs = append(w.Subs, sub)
 		}
+	}
+
+	for _, producer := range w.producers {
+		producer.start(w)
 	}
 	return nil
 }
@@ -167,7 +233,10 @@ func NewWorkflow(wfs *WorkflowSchema, config *NATSStreamingConfig) (*Workflow, e
 		Description: wfs.Description,
 		Tasks:       make(map[string]Task),
 
-		config: config,
+		EndTokens: make(chan *Token, 1000000),
+
+		config:  config,
+		running: false,
 	}
 	wf.ID = fmt.Sprintf("%p", wf)
 
@@ -192,6 +261,6 @@ func NewWorkflow(wfs *WorkflowSchema, config *NATSStreamingConfig) (*Workflow, e
 			return nil, errWrongSchemaDefinition
 		}
 	}
-	// TODO: bootstrap task arcs and you are done
+
 	return wf, nil
 }

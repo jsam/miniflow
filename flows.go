@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"log"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/Knetic/govaluate"
 	"github.com/nats-io/go-nats-streaming"
@@ -61,6 +63,8 @@ type Task struct {
 }
 
 func (t Task) serveToken(msg *stan.Msg) {
+	log.Printf("[task] Received message.")
+
 	recvToken := NewToken()
 	err := json.Unmarshal(msg.Data, &recvToken)
 	if err != nil {
@@ -70,14 +74,18 @@ func (t Task) serveToken(msg *stan.Msg) {
 	recvToken.TaskType = t.Type
 
 	token := t.Fn(recvToken)
-	if token == nil {
+
+	if token == nil || len(t.ToArcs) == 0 {
 		// NOTE: If you returned nil that means that you want to stop that token from progressing through flow.
+		t.workflow.EndTokens <- recvToken
 		return
 	}
 
 	for _, toArc := range t.ToArcs {
+		log.Printf("[task] Searching for usable arcs.")
 		if usable, err := toArc.isUsable(token.Data); usable && err == nil {
 			subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.ID)
+			log.Printf("[task] Usable Arcs found! %s", subj)
 			t.workflow.Publish(subj, token)
 		}
 	}
@@ -111,4 +119,48 @@ func NewWorkflowSchema(schemaPath string) (*WorkflowSchema, error) {
 	}
 
 	return wfs, nil
+}
+
+// Producer is responsible for producing tokens.
+type Producer struct {
+	*sync.RWMutex
+	concurency int
+	isRunning  bool
+	producer   Produce
+}
+
+func (p *Producer) stop() {
+	p.Lock()
+	p.isRunning = false
+	p.Unlock()
+}
+
+func (p *Producer) start(w *Workflow) {
+	p.Lock()
+	p.isRunning = true
+	p.Unlock()
+
+	for i := 0; i < p.concurency; i++ {
+		go func() {
+			log.Printf("[producer] Publisher %s", w.ID)
+			for { // control loop
+				token := p.producer()
+				w.Publish("start", token)
+				if !p.isRunning {
+					break
+				}
+				time.Sleep(time.Nanosecond)
+			}
+		}()
+	}
+}
+
+// NewProducer will create new producer object.
+func NewProducer(concurency int, producer Produce) *Producer {
+	return &Producer{
+		&sync.RWMutex{},
+		concurency,
+		false,
+		producer,
+	}
 }

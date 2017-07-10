@@ -10,43 +10,39 @@ import (
 
 var config *NATSStreamingConfig
 var workflowSchema *WorkflowSchema
-var workflow *Workflow
-var workflowConditional *Workflow
+var workflowSchemaCond *WorkflowSchema // TODO: implement this
 
 func init() {
-	config = NewNATSStreamingConfig("miniflow", "")
+	config = NewNATSStreamingConfig("miniflow", "", true)
 	wfs, errSchema := NewWorkflowSchema("./schemas/example_workflow.yaml")
-	wf, errWf := NewWorkflow(wfs, config)
+	_, errWf := NewWorkflow(wfs, config)
 	if errSchema != nil || errWf != nil {
 		panic("Problem bootstraping test. Make sure NATS is avaialable at nats://localhost:4222")
 	}
 	workflowSchema = wfs
-	workflow = wf
 
-	workflowSchemaCond, errSchemaCond := NewWorkflowSchema("./schemas/example_conditional_workflow.yaml")
-	wfc, errWfc := NewWorkflow(workflowSchemaCond, config)
+	wfsCond, errSchemaCond := NewWorkflowSchema("./schemas/example_conditional_workflow.yaml")
+	_, errWfc := NewWorkflow(wfsCond, config)
 	if errSchemaCond != nil || errWfc != nil {
 		panic("Problem bootstraping test. Make sure NATS is avaialable at nats://localhost:4222")
 	}
-	workflowConditional = wfc
+	workflowSchemaCond = wfsCond
+
 }
 
 func TestMain(m *testing.M) {
 	statusCode := m.Run()
-	workflow.Teardown(time.After(1 * time.Second))
-	workflowConditional.Teardown(time.After(1 * time.Second))
 	os.Exit(statusCode)
 }
 
 func Test_NewWorkflow_FromSchema(t *testing.T) {
 	assert(t, nil, config, false)
 	assert(t, nil, workflowSchema, false)
-	assert(t, nil, workflow, false)
-	assert(t, nil, workflowConditional, false)
-
 }
 
 func Test_Workflow_Relations(t *testing.T) {
+	workflow, _ := NewWorkflow(workflowSchema, config)
+
 	fetchWordlistTask := workflow.Tasks["fetch_wordlist"]
 
 	assert(t, "fetch_wordlist", fetchWordlistTask.ID, true)
@@ -77,45 +73,57 @@ func Test_Workflow_Relations(t *testing.T) {
 }
 
 func Test_Workflow_NoImplementation(t *testing.T) {
-	assert(t, errTaskNotImplemented, workflow.Run(), true)
+	workflow, _ := NewWorkflow(workflowSchema, config)
+	err := workflow.Run()
+	assert(t, errTaskNotImplemented, err.(FlowError).Err, true)
 }
 
 func Test_Workflow_PartialImplementation(t *testing.T) {
+	workflow, _ := NewWorkflow(workflowSchema, config)
+	notInvoked := true
 	work := func(token *Token) *Token {
-		log.Println("basic work")
+		notInvoked = false
 		return nil
 	}
 	workflow.Register("fetch_wordlist", work)
+	assertEqual(t, true, notInvoked)
 
-	assert(t, errTaskNotImplemented, workflow.Run(), true)
+	err := workflow.Run()
+	assert(t, errTaskNotImplemented, err.(FlowError).Err, true)
 }
 
 func Test_Workflow_NoConfigImplementation(t *testing.T) {
-	workflowSchema, _ := NewWorkflowSchema("./schemas/example_workflow.yaml")
-	noConfWorkflow, err := NewWorkflow(workflowSchema, nil)
+	wfs, _ := NewWorkflowSchema("./schemas/example_workflow.yaml")
+	noConfWorkflow, err := NewWorkflow(wfs, nil)
 	assert(t, nil, err, true)
 
+	notInvoked := true
 	work := func(token *Token) *Token {
-		log.Println("basic work")
+		notInvoked = false
 		return nil
 	}
 	noConfWorkflow.Register("fetch_wordlist", work)
 	noConfWorkflow.Register("mutate_wordlist", work)
 	noConfWorkflow.Register("fs_persist", work)
 
-	assert(t, errNatsNoConnection, noConfWorkflow.Run(), true)
+	assert(t, true, notInvoked, true)
+	err = noConfWorkflow.Run()
+	assert(t, errNatsNoConnection, err, true)
 }
 
 func Test_Workflow_FullImplementation(t *testing.T) {
+	workflow, _ := NewWorkflow(workflowSchema, config)
 	assert(t, nil, config, false)
 	assert(t, nil, config.NATSConn, false)
-
+	tokenPath := []*Token{}
 	work := func(token *Token) *Token {
-		log.Printf("my name is %s", token.TaskID)
-		log.Printf("my type is %s", token.TaskType)
-		log.Printf("received token: %+#v", token.ContextID)
+		log.Printf("fullimpl: %s :: %s", token.TaskID, token.ContextID)
+		if token.ContextID == "my token" {
+			tokenPath = append(tokenPath, token)
+		}
 		return token
 	}
+
 	workflow.Register("fetch_wordlist", work)
 	workflow.Register("mutate_wordlist", work)
 	workflow.Register("fs_persist", work)
@@ -128,13 +136,36 @@ func Test_Workflow_FullImplementation(t *testing.T) {
 
 	token.ContextID = "my second token"
 	workflow.Publish("start", token)
+
+	recvCount := 0
+	for {
+		<-workflow.EndTokens
+		recvCount++
+		if recvCount == 2 {
+			break
+		}
+	}
+	assertEqual(t, 2, recvCount)
+
+	assert(t, 3, len(tokenPath), true)
+	assert(t, "fetch_wordlist", tokenPath[0].TaskID, true)
+	assert(t, "mutate_wordlist", tokenPath[1].TaskID, true)
+	assert(t, "fs_persist", tokenPath[2].TaskID, true)
+
+	for i := 0; i < 3; i++ {
+		assert(t, "my token", tokenPath[0].ContextID, true)
+	}
+
+	workflow.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_FirstTerminationImplementation(t *testing.T) {
+	workflow, _ := NewWorkflow(workflowSchema, config)
+	invoked := false
+	var recordToken *Token
 	work := func(token *Token) *Token {
-		log.Printf("my name is %s", token.TaskID)
-		log.Printf("my type is %s", token.TaskType)
-		log.Printf("received token: %+#v", token.ContextID)
+		invoked = true
+		recordToken = token
 		return nil
 	}
 	workflow.Register("fetch_wordlist", work)
@@ -150,17 +181,38 @@ func Test_Workflow_FirstTerminationImplementation(t *testing.T) {
 	token.ContextID = "my second token"
 	workflow.Publish("start", token)
 
+	recvCount := 0
+	for {
+		<-workflow.EndTokens
+		recvCount++
+		if recvCount == 2 {
+			break
+		}
+	}
+	assertEqual(t, 2, recvCount)
+	assert(t, nil, recordToken, false)
+	assert(t, true, invoked, true)
+	assert(t, "fetch_wordlist", recordToken.TaskID, true)
+
+	workflow.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_SecondTerminationImplementation(t *testing.T) {
+	workflow, _ := NewWorkflow(workflowSchema, config)
+
+	firstInvoked := false
+	var firstRecorded *Token
 	workCollector := func(token *Token) *Token {
+		firstInvoked = true
+		firstRecorded = token
 		return token
 	}
 
+	invoked := false
+	var recordedToken *Token
 	work := func(token *Token) *Token {
-		log.Printf("my name is %s", token.TaskID)
-		log.Printf("my type is %s", token.TaskType)
-		log.Printf("received token: %+#v", token.ContextID)
+		invoked = true
+		recordedToken = token
 		return nil
 	}
 	workflow.Register("fetch_wordlist", workCollector)
@@ -175,14 +227,41 @@ func Test_Workflow_SecondTerminationImplementation(t *testing.T) {
 
 	token.ContextID = "my second token"
 	workflow.Publish("start", token)
+
+	recvCount := 0
+	for {
+		<-workflow.EndTokens
+		recvCount++
+		if recvCount == 2 {
+			break
+		}
+	}
+	assertEqual(t, 2, recvCount)
+
+	assert(t, true, invoked, true)
+	assert(t, nil, recordedToken, false)
+
+	workflow.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_ConditionalImplementation(t *testing.T) {
+	workflowConditional, _ := NewWorkflow(workflowSchemaCond, config)
+	zeroCount := 0
+	nonZeroCount := 0
+
+	workCollectorInvoked := false
+	var wcToken *Token
 	workCollector := func(token *Token) *Token {
+		workCollectorInvoked = true
+		wcToken = token
 		return token
 	}
 
+	gatewayInvoked := false
+	var gatewayToken *Token
 	gateway := func(token *Token) *Token {
+		gatewayInvoked = true
+		gatewayToken = token
 		return token
 	}
 
@@ -190,6 +269,7 @@ func Test_Workflow_ConditionalImplementation(t *testing.T) {
 		someID := int(token.Data["some_id"].(float64))
 		log.Printf("I received some value: %d\n", someID)
 		assert(t, int(0), someID, false)
+		nonZeroCount++
 		return nil
 	}
 
@@ -198,6 +278,7 @@ func Test_Workflow_ConditionalImplementation(t *testing.T) {
 
 		log.Printf("I received zero. val == %d\n", someID)
 		assert(t, int(0), someID, true)
+		zeroCount++
 		return nil
 	}
 
@@ -205,24 +286,45 @@ func Test_Workflow_ConditionalImplementation(t *testing.T) {
 	workflowConditional.Register("B", gateway)
 	workflowConditional.Register("C", zeroHandler)
 	workflowConditional.Register("D", valueHandler)
-
 	assert(t, nil, workflowConditional.Run(), true)
 
 	token := NewToken()
 	token.ContextID = "my token"
-	token.Data["someId"] = 0
+	token.Data["some_id"] = 0
 	workflowConditional.Publish("start", token)
 
 	token.ContextID = "my second token"
-	token.Data["someId"] = 1
+	token.Data["some_id"] = 1
 	workflowConditional.Publish("start", token)
 
 	token.ContextID = "my third token"
-	token.Data["someId"] = 1000
+	token.Data["some_id"] = 1000
 	workflowConditional.Publish("start", token)
+
+	recvCount := 0
+	for {
+		<-workflowConditional.EndTokens
+		recvCount++
+		if recvCount == 3 {
+			break
+		}
+	}
+	assertEqual(t, 3, recvCount)
+
+	assert(t, 1, zeroCount, true)
+	assert(t, 2, nonZeroCount, true)
+
+	assertTrue(t, workCollectorInvoked)
+	assertNotNil(t, wcToken)
+
+	assertTrue(t, gatewayInvoked)
+	assertNotNil(t, gatewayToken)
+
+	workflowConditional.Teardown(time.After(time.Microsecond))
 }
 
-func BenchmarkFlow(b *testing.B) {
+func Test_Workflow_ConditionalImplementation_Publisher(t *testing.T) {
+	workflowConditional, _ := NewWorkflow(workflowSchemaCond, config)
 	workCollector := func(token *Token) *Token {
 		return token
 	}
@@ -231,16 +333,15 @@ func BenchmarkFlow(b *testing.B) {
 		return token
 	}
 
+	valueCounter := 0
 	valueHandler := func(token *Token) *Token {
-		someID := int(token.Data["some_id"].(float64))
-		log.Printf("I received some value: %d\n", someID)
+		valueCounter++
 		return nil
 	}
 
+	zeroCounter := 0
 	zeroHandler := func(token *Token) *Token {
-		someID := int(token.Data["some_id"].(float64))
-
-		log.Printf("I received zero. val == %d\n", someID)
+		zeroCounter++
 		return nil
 	}
 
@@ -249,21 +350,31 @@ func BenchmarkFlow(b *testing.B) {
 	workflowConditional.Register("C", zeroHandler)
 	workflowConditional.Register("D", valueHandler)
 
-	b.StartTimer()
+	counter := 0
 	rand.Seed(1234)
-	publish1000 := func() {
-		for i := 0; i < 1000; i++ {
-			token := NewToken()
-			token.ContextID = "some token"
-			token.Data["someId"] = rand.Intn(1)
-			go func() {
-				workflowConditional.Publish("start", token)
-			}()
+	publish := func() *Token {
+		token := NewToken()
+		token.ContextID = "some token"
+		token.Data["some_id"] = 0
+		token.Data["counter"] = counter
+		counter++
+		return token
+	}
+
+	assert(t, nil, workflowConditional.AttachProducer(1, publish), true)
+	assert(t, nil, workflowConditional.Run(), true)
+
+	recvCount := 0
+	for {
+		<-workflowConditional.EndTokens
+		recvCount++
+		if recvCount == 3 {
+			break
 		}
 	}
-	for i := 0; i < 1000; i++ {
-		go publish1000()
-	}
-	workflowConditional.Teardown(time.After(1 * time.Millisecond))
-	b.StopTimer()
+	assertEqual(t, 3, recvCount)
+
+	assertNotEqual(t, 0, zeroCounter)
+	assertEqual(t, 0, valueCounter)
+	log.Printf("counter %d", counter)
 }
