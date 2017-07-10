@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nats-io/go-nats-streaming"
 	"log"
 	"time"
-
-	"github.com/nats-io/go-nats-streaming"
 )
 
 var (
@@ -52,7 +51,6 @@ type Produce func() *Token
 
 // Workflow is structure which will be used to execute a a workflow
 type Workflow struct {
-	ID          string
 	Name        string
 	Description string
 	Tasks       map[string]Task
@@ -88,7 +86,7 @@ func (w *Workflow) AttachProducer(concurency int, produceFn Produce) error {
 // Publish is used to publish information between tasks. Can be used externally to start the flow.
 func (w *Workflow) Publish(subject string, token *Token) error {
 	if subject == "start" {
-		subject = fmt.Sprintf("start:%s", w.ID)
+		subject = fmt.Sprintf("start:%s", w.Name)
 	}
 	tokenB, err := json.Marshal(token)
 	if err != nil {
@@ -99,10 +97,8 @@ func (w *Workflow) Publish(subject string, token *Token) error {
 	if err != nil {
 		log.Printf("[nflow] Publish failed %+v", msg)
 		return err
-	} else {
-		log.Print("[nflow] Publish successeed %+v", msg)
 	}
-
+	log.Printf("[nflow] Publish successeed. Msg guid: %+v\n", msg)
 	return nil
 }
 
@@ -138,7 +134,7 @@ func (w *Workflow) Teardown(signalChan <-chan time.Time) {
 			log.Printf("[nflow] Received an interrupt, unsubscribing and closing connection...")
 
 			// Do not unsubscribe a durable on exit, except if asked to.
-			if w.config.Durable == "" {
+			if w.config != nil && w.config.Durable == "" {
 				for _, sub := range w.Subs {
 					sub.Unsubscribe()
 				}
@@ -152,7 +148,8 @@ func (w *Workflow) Teardown(signalChan <-chan time.Time) {
 	w.running = false
 }
 
-func (w *Workflow) Stop() {
+// Close will explicitly close connection towards NATS messaging.
+func (w *Workflow) Close() {
 	log.Printf("[nflow] Closed connection to NATS.")
 	w.config.NATSConn.Close()
 }
@@ -168,26 +165,7 @@ func (w *Workflow) Run() error {
 	if w.config == nil {
 		return errNatsNoConnection
 	}
-	log.Printf("[nflow] ID: %s %s\n", w.ID, w.config.ClientID)
-
-	// TODO(sam): rework QueueSubscribe to work with different configuration options
-	// startOpt := stan.StartAt(pb.StartPosition_NewOnly)
-	//
-	// if w.config.StartSeq != 0 {
-	// 	startOpt = stan.StartAtSequence(w.config.StartSeq)
-	// } else if w.config.DeliverLast == true {
-	// 	startOpt = stan.StartWithLastReceived()
-	// } else if w.config.DeliverAll == true {
-	// 	log.Print("subscribing with DeliverAllAvailable")
-	// 	startOpt = stan.DeliverAllAvailable()
-	// } else if w.config.StartDelta != "" {
-	// 	ago, err := time.ParseDuration(w.config.StartDelta)
-	// 	if err != nil {
-	// 		w.config.NATSConn.Close()
-	// 		log.Fatal(err)
-	// 	}
-	// 	startOpt = stan.StartAtTimeDelta(ago)
-	// }
+	log.Printf("[nflow] ID: %s %s\n", w.Name, w.config.ClientID)
 
 	if len(w.Tasks) > 0 {
 		w.running = true
@@ -197,7 +175,7 @@ func (w *Workflow) Run() error {
 	// QueueGroup is task name, cause all same tasks are competing for work.
 	for _, task := range w.Tasks {
 		if len(task.FromArcs) == 0 {
-			subj := fmt.Sprintf("%s:%s", "start", w.ID)
+			subj := fmt.Sprintf("%s:%s", "start", w.Name)
 			log.Printf("[nflow] Subscribing to %s", subj)
 			sub, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, stan.StartAtTime(time.Now()), stan.DurableName(w.config.Durable))
 			if err != nil {
@@ -208,7 +186,7 @@ func (w *Workflow) Run() error {
 			w.Subs = append(w.Subs, sub)
 		}
 		for _, fromArc := range task.FromArcs {
-			subj := fmt.Sprintf("%s:%s", fromArc.ID, w.ID)
+			subj := fmt.Sprintf("%s:%s", fromArc.ID, w.Name)
 			log.Printf("[nflow] Subscribing to %s", subj)
 			sub, err := w.config.NATSConn.QueueSubscribe(subj, task.ID, task.serveToken, stan.StartAtTime(time.Now()), stan.DurableName(w.config.Durable))
 			if err != nil {
@@ -238,7 +216,6 @@ func NewWorkflow(wfs *WorkflowSchema, config *NATSStreamingConfig) (*Workflow, e
 		config:  config,
 		running: false,
 	}
-	wf.ID = fmt.Sprintf("%p", wf)
 
 	for _, task := range wfs.Tasks {
 		task.workflow = wf

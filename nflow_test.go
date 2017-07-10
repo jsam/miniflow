@@ -2,15 +2,15 @@ package miniflow
 
 import (
 	"log"
-	"math/rand"
 	"os"
 	"testing"
 	"time"
 )
 
 var config *NATSStreamingConfig
+
 var workflowSchema *WorkflowSchema
-var workflowSchemaCond *WorkflowSchema // TODO: implement this
+var workflowSchemaCond *WorkflowSchema
 
 func init() {
 	config = NewNATSStreamingConfig("miniflow", "", true)
@@ -90,6 +90,7 @@ func Test_Workflow_PartialImplementation(t *testing.T) {
 
 	err := workflow.Run()
 	assert(t, errTaskNotImplemented, err.(FlowError).Err, true)
+	workflow.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_NoConfigImplementation(t *testing.T) {
@@ -109,6 +110,8 @@ func Test_Workflow_NoConfigImplementation(t *testing.T) {
 	assert(t, true, notInvoked, true)
 	err = noConfWorkflow.Run()
 	assert(t, errNatsNoConnection, err, true)
+
+	noConfWorkflow.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_FullImplementation(t *testing.T) {
@@ -140,6 +143,7 @@ func Test_Workflow_FullImplementation(t *testing.T) {
 	recvCount := 0
 	for {
 		<-workflow.EndTokens
+
 		recvCount++
 		if recvCount == 2 {
 			break
@@ -160,7 +164,8 @@ func Test_Workflow_FullImplementation(t *testing.T) {
 }
 
 func Test_Workflow_FirstTerminationImplementation(t *testing.T) {
-	workflow, _ := NewWorkflow(workflowSchema, config)
+	wf, _ := NewWorkflow(workflowSchema, config)
+
 	invoked := false
 	var recordToken *Token
 	work := func(token *Token) *Token {
@@ -168,23 +173,26 @@ func Test_Workflow_FirstTerminationImplementation(t *testing.T) {
 		recordToken = token
 		return nil
 	}
-	workflow.Register("fetch_wordlist", work)
-	workflow.Register("mutate_wordlist", work)
-	workflow.Register("fs_persist", work)
 
-	assert(t, nil, workflow.Run(), true)
+	wf.Register("fetch_wordlist", work)
+	wf.Register("mutate_wordlist", work)
+	wf.Register("fs_persist", work)
+
+	assert(t, nil, wf.Run(), true)
 
 	token := NewToken()
 	token.ContextID = "my token"
-	workflow.Publish("start", token)
+	wf.Publish("start", token)
 
 	token.ContextID = "my second token"
-	workflow.Publish("start", token)
+	wf.Publish("start", token)
 
 	recvCount := 0
 	for {
-		<-workflow.EndTokens
+		<-wf.EndTokens
 		recvCount++
+		log.Print(recvCount)
+
 		if recvCount == 2 {
 			break
 		}
@@ -194,7 +202,7 @@ func Test_Workflow_FirstTerminationImplementation(t *testing.T) {
 	assert(t, true, invoked, true)
 	assert(t, "fetch_wordlist", recordToken.TaskID, true)
 
-	workflow.Teardown(time.After(time.Microsecond))
+	wf.Teardown(time.After(time.Microsecond))
 }
 
 func Test_Workflow_SecondTerminationImplementation(t *testing.T) {
@@ -237,6 +245,9 @@ func Test_Workflow_SecondTerminationImplementation(t *testing.T) {
 		}
 	}
 	assertEqual(t, 2, recvCount)
+
+	assertEqual(t, true, firstInvoked)
+	assertEqual(t, "collector", firstRecorded.TaskType)
 
 	assert(t, true, invoked, true)
 	assert(t, nil, recordedToken, false)
@@ -351,7 +362,6 @@ func Test_Workflow_ConditionalImplementation_Publisher(t *testing.T) {
 	workflowConditional.Register("D", valueHandler)
 
 	counter := 0
-	rand.Seed(1234)
 	publish := func() *Token {
 		token := NewToken()
 		token.ContextID = "some token"
@@ -377,4 +387,5 @@ func Test_Workflow_ConditionalImplementation_Publisher(t *testing.T) {
 	assertNotEqual(t, 0, zeroCounter)
 	assertEqual(t, 0, valueCounter)
 	log.Printf("counter %d", counter)
+	workflowConditional.Teardown(time.After(time.Microsecond))
 }

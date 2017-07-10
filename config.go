@@ -19,21 +19,14 @@ var (
 
 // NATSStreamingConfig is object which holds important information about connection and nats streaming server.
 type NATSStreamingConfig struct {
-	ClusterID   string
-	ClientID    string
-	ShowTime    bool
-	StartSeq    uint64
-	StartDelta  string
-	DeliverAll  bool
-	DeliverLast bool
-	Durable     string
-	URL         string
+	ClusterID string
+	ClientID  string
+	Durable   string
 
 	NATSConn stan.Conn `yaml:"-"`
 }
 
 func (c *NATSStreamingConfig) loadConfig() error {
-	// TODO: neccessary for durable connections
 	d, err := ioutil.ReadFile(".miniflow")
 	if err != nil {
 		return errCannotReadConfig
@@ -47,8 +40,6 @@ func (c *NATSStreamingConfig) loadConfig() error {
 }
 
 func (c *NATSStreamingConfig) writeConfig() error {
-	// TODO: neccessary for durable connections
-	// TODO: serialize c to yaml struct
 	d, err := yaml.Marshal(c)
 	if err != nil {
 		return errCannotMarshalConfig
@@ -77,11 +68,6 @@ func NewNATSStreamingConfig(clusterID, url string, reloadConfig bool) *NATSStrea
 
 		natsConfig.ClusterID = clusterID
 		natsConfig.ClientID = clientID
-		natsConfig.ShowTime = false
-		natsConfig.StartSeq = 0
-		natsConfig.StartDelta = ""
-		natsConfig.DeliverAll = false
-		natsConfig.DeliverLast = true
 		natsConfig.Durable = ""
 	}
 

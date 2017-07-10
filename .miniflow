@@ -1,9 +1,3 @@
 clusterid: miniflow
-clientid: nVlg7eyy6y8unLfdf072TW
-showtime: false
-startseq: 0
-startdelta: ""
-deliverall: false
-deliverlast: true
-durable: meh
-url: ""
+clientid: jE3bDTnYwlwFF0eCFdPyjr
+durable: ""

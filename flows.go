@@ -77,14 +77,16 @@ func (t Task) serveToken(msg *stan.Msg) {
 
 	if token == nil || len(t.ToArcs) == 0 {
 		// NOTE: If you returned nil that means that you want to stop that token from progressing through flow.
+		log.Printf("[task] Ending token.")
 		t.workflow.EndTokens <- recvToken
+		log.Printf("[task] token ended")
 		return
 	}
 
 	for _, toArc := range t.ToArcs {
 		log.Printf("[task] Searching for usable arcs.")
 		if usable, err := toArc.isUsable(token.Data); usable && err == nil {
-			subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.ID)
+			subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.Name)
 			log.Printf("[task] Usable Arcs found! %s", subj)
 			t.workflow.Publish(subj, token)
 		}
@@ -142,7 +144,7 @@ func (p *Producer) start(w *Workflow) {
 
 	for i := 0; i < p.concurency; i++ {
 		go func() {
-			log.Printf("[producer] Publisher %s", w.ID)
+			log.Printf("[producer] Publisher %s", w.Name)
 			for { // control loop
 				token := p.producer()
 				w.Publish("start", token)
