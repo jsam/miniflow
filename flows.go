@@ -153,11 +153,13 @@ func (p *Producer) start(w *Workflow) {
 			log.Printf("[producer] Publisher %s", w.Name)
 			for { // control loop
 				token := p.producer()
-				w.Publish("start", token)
-				if !p.isRunning {
-					break
+				if token != nil {
+					w.Publish("start", token)
+					if !p.isRunning {
+						break
+					}
+					time.Sleep(time.Microsecond)
 				}
-				time.Sleep(time.Nanosecond)
 			}
 		}()
 	}
