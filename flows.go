@@ -92,6 +92,8 @@ func (t Task) serveToken(msg *stan.Msg) {
 		if usable, err := toArc.isUsable(token.Data); usable && err == nil {
 			subj := fmt.Sprintf("%s:%s", toArc.ID, t.workflow.Name)
 			log.Printf("[task] Usable Arcs found! %s", subj)
+
+			token.Ctx = nil // This is local context. Should not be pass through tasks, but injected locally.
 			t.workflow.Publish(subj, token)
 		}
 	}
