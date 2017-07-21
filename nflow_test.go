@@ -389,3 +389,57 @@ func Test_Workflow_ConditionalImplementation_Publisher(t *testing.T) {
 	log.Printf("counter %d", counter)
 	workflowConditional.Teardown(time.After(time.Microsecond))
 }
+
+func Test_Workflow_Ctx(t *testing.T) {
+	workflowConditional, _ := NewWorkflow(workflowSchemaCond, config)
+	workflowConditional.Ctx = map[string]interface{}{
+		"redisURL": "localhost",
+	}
+
+	workCollector := func(token *Token) *Token {
+		return token
+	}
+
+	gateway := func(token *Token) *Token {
+		return token
+	}
+
+	valueHandler := func(token *Token) *Token {
+		return nil
+	}
+
+	zeroHandler := func(token *Token) *Token {
+		assertEqual(t, token.Ctx.(map[string]interface{})["redisURL"], "localhost")
+		return nil
+	}
+
+	workflowConditional.Register("A", workCollector)
+	workflowConditional.Register("B", gateway)
+	workflowConditional.Register("C", zeroHandler)
+	workflowConditional.Register("D", valueHandler)
+
+	counter := 0
+	publish := func() *Token {
+		token := NewToken()
+		token.ContextID = "some token"
+		token.Data["some_id"] = 0
+		token.Data["counter"] = counter
+		counter++
+		return token
+	}
+
+	assert(t, nil, workflowConditional.AttachProducer(1, publish), true)
+	assert(t, nil, workflowConditional.Run(), true)
+
+	recvCount := 0
+	for {
+		<-workflowConditional.EndTokens
+		recvCount++
+		if recvCount == 3 {
+			break
+		}
+	}
+	assertEqual(t, 3, recvCount)
+	log.Printf("counter %d", counter)
+	workflowConditional.Teardown(time.After(time.Microsecond))
+}

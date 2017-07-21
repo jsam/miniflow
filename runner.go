@@ -15,6 +15,7 @@ var ErrWorkflowNotFound = errors.New("Workflow is not found")
 type WorkflowRunner struct {
 	Workflows map[string]*Workflow
 	Config    *NATSStreamingConfig
+	Ctx       interface{}
 }
 
 // Register will register defined workflow for running state.
@@ -29,7 +30,11 @@ func (wr *WorkflowRunner) Run(name string) (*Workflow, error) {
 		return nil, ErrWorkflowNotFound
 	}
 
-	wf.Run()
+	if wr.Ctx != nil {
+		wf.RunWithContext(wr.Ctx)
+	} else {
+		wf.Run()
+	}
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -61,5 +66,6 @@ func NewWorkflowRunner(config *NATSStreamingConfig) *WorkflowRunner {
 	return &WorkflowRunner{
 		make(map[string]*Workflow),
 		config,
+		nil,
 	}
 }

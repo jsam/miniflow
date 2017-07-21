@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nats-io/go-nats-streaming"
 	"log"
 	"time"
+
+	"github.com/nats-io/go-nats-streaming"
 )
 
 var (
@@ -31,6 +32,7 @@ type Token struct {
 	TaskID    string
 	TaskType  string
 	ContextID string
+	Ctx       interface{}
 	Data      map[string]interface{}
 }
 
@@ -55,8 +57,8 @@ type Workflow struct {
 	Description string
 	Tasks       map[string]Task
 	Subs        []stan.Subscription
-
-	EndTokens chan *Token
+	Ctx         interface{}
+	EndTokens   chan *Token
 
 	producers []*Producer
 	running   bool
@@ -152,6 +154,11 @@ func (w *Workflow) Teardown(signalChan <-chan time.Time) {
 func (w *Workflow) Close() {
 	log.Printf("[nflow] Closed connection to NATS.")
 	w.config.NATSConn.Close()
+}
+
+func (w *Workflow) RunWithContext(Ctx interface{}) error {
+	w.Ctx = Ctx
+	return w.Run()
 }
 
 // Run is method to start execution of the workflow.

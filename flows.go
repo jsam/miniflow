@@ -73,6 +73,10 @@ func (t Task) serveToken(msg *stan.Msg) {
 	recvToken.TaskID = t.ID
 	recvToken.TaskType = t.Type
 
+	if t.workflow.Ctx != nil {
+		recvToken.Ctx = t.workflow.Ctx
+	}
+
 	token := t.Fn(recvToken)
 
 	if token == nil || len(t.ToArcs) == 0 {
